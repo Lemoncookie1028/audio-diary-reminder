@@ -2,7 +2,7 @@ import { firebaseConfig, VAPID_KEY } from "./firebase-config.js";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged,
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, deleteDoc, onSnapshot,
@@ -113,30 +113,29 @@ async function deleteFromDrive(fileId) {
   await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, { method: "DELETE" });
 }
 
-$("reconnectDrive").addEventListener("click", () => {
-  signInWithRedirect(auth, driveProvider());
+$("reconnectDrive").addEventListener("click", async () => {
+  try {
+    const result = await signInWithPopup(auth, driveProvider());
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    storeDriveToken(credential?.accessToken);
+    showDriveNudge(false);
+  } catch (err) {
+    alert("Couldn't reconnect Drive — " + err.message);
+  }
 });
 
 // ---------- Auth ----------
-signInBtn.addEventListener("click", () => {
+signInBtn.addEventListener("click", async () => {
   authError.hidden = true;
-  signInWithRedirect(auth, driveProvider());
-});
-
-// Runs once on load, after either a fresh sign-in or a Drive reconnect
-// sends the browser back from Google. Redirect results don't come
-// through onAuthStateChanged — they have to be picked up here.
-getRedirectResult(auth)
-  .then((result) => {
-    if (!result) return;
+  try {
+    const result = await signInWithPopup(auth, driveProvider());
     const credential = GoogleAuthProvider.credentialFromResult(result);
     storeDriveToken(credential?.accessToken);
-    showDriveNudge(!driveAccessToken);
-  })
-  .catch((err) => {
+  } catch (err) {
     authError.textContent = "Couldn't sign in — " + err.message;
     authError.hidden = false;
-  });
+  }
+});
 
 signOutBtn.addEventListener("click", () => {
   storeDriveToken(null);
