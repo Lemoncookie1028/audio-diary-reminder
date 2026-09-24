@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Spoken — voice diary &amp; reminders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Signed-out screen -->
+  <div id="gate" class="gate">
+    <div class="gate-mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="56" height="56">
+        <circle cx="32" cy="32" r="30" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="32" cy="32" r="10" fill="currentColor"/>
+      </svg>
+    </div>
+    <h1>Spoken</h1>
+    <p class="gate-sub">A private place to talk to yourself, and to be reminded of what matters.</p>
+    <button id="signInBtn" class="btn btn-accent">Continue with Google</button>
+    <p id="authError" class="auth-error" hidden></p>
+  </div>
+
+  <!-- Signed-in app -->
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="22" height="22"><circle cx="32" cy="32" r="30" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="32" cy="32" r="9" fill="currentColor"/></svg>
+        </span>
+        Spoken
+      </div>
+      <div class="topbar-right">
+        <span id="userName" class="user-name"></span>
+        <button id="signOutBtn" class="btn-ghost">Sign out</button>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="diary" role="tab" aria-selected="true">Diary</button>
+      <button class="tab" data-tab="reminders" role="tab" aria-selected="false">Reminders</button>
+    </nav>
+
+    <!-- DIARY -->
+    <section id="panel-diary" class="panel active">
+      <div class="recorder">
+        <button id="recordBtn" class="record-btn" aria-label="Start recording">
+          <span class="record-dot"></span>
+        </button>
+        <div class="record-status">
+          <span id="recordLabel">Tap to record</span>
+          <span id="recordTime" class="record-time" hidden>00:00</span>
+        </div>
+      </div>
+
+      <div id="entryComposer" class="entry-composer" hidden>
+        <audio id="previewAudio" controls></audio>
+        <input id="entryTitle" type="text" placeholder="Give this entry a title (optional)" maxlength="80" />
+        <div class="composer-actions">
+          <button id="discardEntry" class="btn-ghost">Discard</button>
+          <button id="saveEntry" class="btn btn-accent">Save entry</button>
+        </div>
+      </div>
+
+      <div id="entryList" class="entry-list"></div>
+      <p id="entryEmpty" class="empty-state" hidden>Nothing recorded yet. Your first entry is one tap away.</p>
+    </section>
+
+    <!-- REMINDERS -->
+    <section id="panel-reminders" class="panel">
+      <form id="reminderForm" class="reminder-form">
+        <input id="reminderTitle" type="text" placeholder="Remind me to…" maxlength="120" required />
+        <div class="reminder-form-row">
+          <input id="reminderWhen" type="datetime-local" required />
+          <button type="submit" class="btn btn-accent">Set reminder</button>
+        </div>
+      </form>
+
+      <div id="notifNudge" class="notif-nudge" hidden>
+        <span>Turn on notifications so reminders can reach you.</span>
+        <button id="enableNotifs" class="btn-ghost">Enable</button>
+      </div>
+
+      <div id="reminderList" class="reminder-list"></div>
+      <p id="reminderEmpty" class="empty-state" hidden>No reminders set. Add one above.</p>
+    </section>
+  </div>
+
+  <script type="module" src="firebase-config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
