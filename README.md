@@ -4,6 +4,10 @@ A small web app: record voice diary entries (audio only, no transcription),
 and set reminders that reach you as browser push notifications even when
 the tab is closed. Sign-in is Google only, via Firebase Auth.
 
+`public/index.html` is a static landing page; `public/home.html` is the
+actual signed-in app (recorder, entries, reminders). The landing page's
+"Open Spoken" button just links to `home.html`.
+
 ## Stack
 
 - **Auth:** Firebase Authentication (Google provider)
