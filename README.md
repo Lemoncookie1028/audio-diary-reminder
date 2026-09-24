@@ -8,10 +8,25 @@ the tab is closed. Sign-in is Google only, via Firebase Auth.
 
 - **Auth:** Firebase Authentication (Google provider)
 - **Data:** Firestore (`users/{uid}/entries`, `users/{uid}/reminders`)
-- **Audio storage:** Firebase Storage
+- **Audio storage:** the signed-in user's own Google Drive, in a folder
+  called "Spoken Voice Diary" that the app creates for itself. It only
+  ever has access to files it created (the `drive.file` scope) — never
+  the rest of the user's Drive.
 - **Push:** Firebase Cloud Messaging + a scheduled Cloud Function (checks
   every minute for due reminders and sends the push)
 - **Hosting:** Firebase Hosting (or any static host, minus the Function)
+
+### A note on the Drive approach
+
+Storing audio in Drive means no Firebase Storage bill or quota, and the
+recordings live in an account the user already controls. The trade-off:
+Drive access uses a separate OAuth token from the Firebase sign-in one,
+and it expires roughly every hour. There's no backend here to silently
+refresh it, so when a Drive call fails from an expired token, the app
+shows a "Reconnect" button that re-asks for Drive permission. Playback
+also fetches each recording with that token rather than using a plain
+`<audio src="...">` URL, so entries load in a moment rather than being
+instantly ready.
 
 ## 1. Create the Firebase project
 
@@ -24,11 +39,19 @@ the tab is closed. Sign-in is Google only, via Firebase Auth.
    **Google**.
 4. **Build → Firestore Database → Create database** (production mode is fine —
    `firestore.rules` locks it down).
-5. **Build → Storage → Get started** (again, production mode).
-6. **Project settings → Cloud Messaging → Web configuration → Web Push
+5. **Project settings → Cloud Messaging → Web configuration → Web Push
    certificates** → click **Generate key pair**. Copy the key into
    `VAPID_KEY` in `public/firebase-config.js`.
-7. The scheduled Cloud Function needs the **Blaze (pay-as-you-go) plan**
+6. In the [Google Cloud Console](https://console.cloud.google.com) (same
+   project — Firebase projects are Cloud projects), go to **APIs &
+   Services → Library** and enable the **Google Drive API**.
+7. Under **APIs & Services → OAuth consent screen**, add the
+   `.../auth/drive.file` scope, and add the Google account(s) you'll sign
+   in with as **test users**. `drive.file` is a narrow, non-sensitive
+   scope, so for personal use you can leave the app in "Testing" mode —
+   no Google verification review needed — as long as you're on the test
+   user list.
+8. The scheduled Cloud Function needs the **Blaze (pay-as-you-go) plan**
    (still free at this scale — Cloud Scheduler's free tier covers a
    once-a-minute job). Upgrade under **Project settings → Usage and billing**.
 
@@ -44,7 +67,7 @@ firebase use --add   # pick the project you just created
 ## 3. Deploy
 
 ```bash
-firebase deploy --only firestore:rules,storage:rules
+firebase deploy --only firestore:rules
 cd functions && npm install && cd ..
 firebase deploy --only functions
 firebase deploy --only hosting
@@ -58,8 +81,8 @@ automatically; add any custom domain there too.
 ## How it works
 
 - **Recording:** uses the browser's `MediaRecorder` API to capture audio,
-  uploads the `.webm` file to Storage, and saves a Firestore doc with the
-  title, timestamp, and download URL.
+  uploads the `.webm` file straight to the user's Drive folder, and saves
+  a Firestore doc with the title, timestamp, and the Drive file ID.
 - **Reminders:** each reminder is a Firestore doc with a title, a due time,
   and a `notified` flag. While the app is open, a timer also fires a local
   notification the moment a reminder comes due, so you don't have to wait

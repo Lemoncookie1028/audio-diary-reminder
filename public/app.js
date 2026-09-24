@@ -2,15 +2,12 @@ import { firebaseConfig, VAPID_KEY } from "./firebase-config.js";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+  getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, deleteDoc, onSnapshot,
-  query, orderBy, serverTimestamp, Timestamp, setDoc, arrayUnion,
+  query, orderBy, serverTimestamp, Timestamp, setDoc, getDoc, arrayUnion,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-import {
-  getStorage, ref, uploadBytes, getDownloadURL, deleteObject,
-} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
 import {
   getMessaging, getToken, onMessage, isSupported,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging.js";
@@ -18,7 +15,6 @@ import {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 
 const $ = (id) => document.getElementById(id);
 const gate = $("gate"), appEl = $("app");
@@ -28,18 +24,125 @@ const userNameEl = $("userName");
 let currentUser = null;
 let unsubEntries = null, unsubReminders = null;
 
-// ---------- Auth ----------
-signInBtn.addEventListener("click", async () => {
-  authError.hidden = true;
-  try {
-    await signInWithPopup(auth, new GoogleAuthProvider());
-  } catch (err) {
-    authError.textContent = "Couldn't sign in — " + err.message;
-    authError.hidden = false;
+// ---------- Google Drive (audio storage) ----------
+// drive.file only ever lets this app see files it created itself — never
+// the rest of the user's Drive.
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_FOLDER_NAME = "Spoken Voice Diary";
+let driveAccessToken = sessionStorage.getItem("driveAccessToken") || null;
+let driveFolderId = null;
+
+function driveProvider() {
+  const provider = new GoogleAuthProvider();
+  provider.addScope(DRIVE_SCOPE);
+  return provider;
+}
+
+function storeDriveToken(token) {
+  driveAccessToken = token || null;
+  if (token) sessionStorage.setItem("driveAccessToken", token);
+  else sessionStorage.removeItem("driveAccessToken");
+}
+
+function showDriveNudge(show) { $("driveNudge").hidden = !show; }
+
+// Every Drive call goes through here so an expired token surfaces the
+// same "reconnect" prompt in one place, instead of failing silently.
+async function driveFetch(url, options = {}) {
+  if (!driveAccessToken) {
+    showDriveNudge(true);
+    throw new Error("Connect Google Drive first.");
   }
+  const res = await fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), Authorization: `Bearer ${driveAccessToken}` },
+  });
+  if (res.status === 401) {
+    storeDriveToken(null);
+    showDriveNudge(true);
+    throw new Error("Your Drive session expired — reconnect and try again.");
+  }
+  return res;
+}
+
+async function ensureDriveFolder(uid) {
+  if (driveFolderId) return driveFolderId;
+
+  const userDoc = await getDoc(doc(db, "users", uid));
+  const savedId = userDoc.exists() ? userDoc.data().driveFolderId : null;
+  if (savedId) { driveFolderId = savedId; return savedId; }
+
+  const q = encodeURIComponent(
+    `mimeType='application/vnd.google-apps.folder' and name='${DRIVE_FOLDER_NAME}' and trashed=false`
+  );
+  const searchRes = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)`);
+  const searchData = await searchRes.json();
+  let folderId = searchData.files?.[0]?.id;
+
+  if (!folderId) {
+    const createRes = await driveFetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+    });
+    const createData = await createRes.json();
+    folderId = createData.id;
+  }
+
+  driveFolderId = folderId;
+  await setDoc(doc(db, "users", uid), { driveFolderId: folderId }, { merge: true });
+  return folderId;
+}
+
+async function uploadToDrive(uid, blob, title) {
+  const folderId = await ensureDriveFolder(uid);
+  const metadata = { name: `${title || "entry"}-${Date.now()}.webm`, parents: [folderId] };
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  form.append("file", blob);
+  const res = await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error("Drive upload failed.");
+  const data = await res.json();
+  return data.id;
+}
+
+async function deleteFromDrive(fileId) {
+  await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, { method: "DELETE" });
+}
+
+$("reconnectDrive").addEventListener("click", () => {
+  signInWithRedirect(auth, driveProvider());
 });
 
-signOutBtn.addEventListener("click", () => signOut(auth));
+// ---------- Auth ----------
+signInBtn.addEventListener("click", () => {
+  authError.hidden = true;
+  signInWithRedirect(auth, driveProvider());
+});
+
+// Runs once on load, after either a fresh sign-in or a Drive reconnect
+// sends the browser back from Google. Redirect results don't come
+// through onAuthStateChanged — they have to be picked up here.
+getRedirectResult(auth)
+  .then((result) => {
+    if (!result) return;
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    storeDriveToken(credential?.accessToken);
+    showDriveNudge(!driveAccessToken);
+  })
+  .catch((err) => {
+    authError.textContent = "Couldn't sign in — " + err.message;
+    authError.hidden = false;
+  });
+
+signOutBtn.addEventListener("click", () => {
+  storeDriveToken(null);
+  driveFolderId = null;
+  signOut(auth);
+});
 
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
@@ -50,6 +153,7 @@ onAuthStateChanged(auth, (user) => {
     gate.hidden = true;
     appEl.hidden = false;
     userNameEl.textContent = user.displayName || user.email || "";
+    showDriveNudge(!driveAccessToken);
     watchEntries(user.uid);
     watchReminders(user.uid);
     setupNotifications(user.uid);
@@ -131,14 +235,11 @@ $("saveEntry").addEventListener("click", async () => {
   saveBtn.disabled = true;
   saveBtn.textContent = "Saving…";
   try {
-    const id = crypto.randomUUID();
-    const storageRef = ref(storage, `users/${currentUser.uid}/entries/${id}.webm`);
-    await uploadBytes(storageRef, recordedBlob);
-    const audioUrl = await getDownloadURL(storageRef);
+    const title = entryTitle.value.trim() || "Untitled entry";
+    const driveFileId = await uploadToDrive(currentUser.uid, recordedBlob, title);
     await addDoc(collection(db, "users", currentUser.uid, "entries"), {
-      title: entryTitle.value.trim() || "Untitled entry",
-      audioUrl,
-      storagePath: storageRef.fullPath,
+      title,
+      driveFileId,
       createdAt: serverTimestamp(),
     });
     recordedBlob = null;
@@ -169,19 +270,39 @@ function watchEntries(uid) {
           <span class="entry-title"></span>
           <span class="entry-date">${when}</span>
         </div>
-        <audio controls src="${e.audioUrl}"></audio>
-        <div class="card-actions"><button class="icon-btn" data-id="${docSnap.id}" data-path="${e.storagePath}">Delete</button></div>
+        <div class="audio-slot"><button class="btn-ghost play-btn">▶ Play</button></div>
+        <div class="card-actions"><button class="icon-btn" data-id="${docSnap.id}" data-file="${e.driveFileId}">Delete</button></div>
       `;
       card.querySelector(".entry-title").textContent = e.title;
+      card.querySelector(".play-btn").addEventListener("click", (ev) => playEntry(e.driveFileId, ev.target));
       card.querySelector(".icon-btn").addEventListener("click", async (ev) => {
-        const { id, path } = ev.target.dataset;
+        const { id, file } = ev.target.dataset;
         if (!confirm("Delete this entry?")) return;
         await deleteDoc(doc(db, "users", uid, "entries", id));
-        try { await deleteObject(ref(storage, path)); } catch (_) {}
+        try { await deleteFromDrive(file); } catch (_) {}
       });
       list.appendChild(card);
     });
   });
+}
+
+async function playEntry(fileId, btn) {
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  try {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+    if (!res.ok) throw new Error("Couldn't load this recording.");
+    const blob = await res.blob();
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.autoplay = true;
+    audio.src = URL.createObjectURL(blob);
+    btn.replaceWith(audio);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "▶ Play";
+    alert(err.message);
+  }
 }
 
 // ---------- Reminders ----------
@@ -225,7 +346,7 @@ function watchReminders(uid) {
       list.appendChild(card);
 
       // Catch reminders that came due while this tab is open.
-      if (!isPast && !r._timerSet) {
+      if (!isPast) {
         const delay = whenDate.getTime() - now;
         if (delay < 24 * 60 * 60 * 1000) {
           setTimeout(() => notifyLocally(r.title), delay);
